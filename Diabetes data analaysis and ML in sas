@@ -1,0 +1,280 @@
+/*Ներմուծում ենք առաջին Data-ն*/
+proc import datafile='/home/u63779704/diabetes.csv' 
+            out=data_1
+            dbms=csv 
+            replace;
+run;
+/*Ներմուծում ենք երկրորդ Data-ն*/
+proc import datafile='/home/u63779704/Diabetes_Classification.xlsx' 
+            out=data_2
+            dbms=xlsx
+            replace;
+run;
+/*Ստանդարտացնում ենք երկրորդ Data-ն*/
+data data_2;
+	set data_2;
+	if Diabetes ="No diabetes" then Diabetes=0;
+	else if Diabetes="Diabetes" then Diabetes=1;
+	Diabetes_=input(Diabetes,best.);
+	drop Q R Diabetes;
+run;
+
+data data_2;
+	set data_2;
+	if Gender ="female" then Gender=1;
+	else if Gender="male" then Gender=0;
+	Gender_=input(Gender,best.);
+	drop Gender;
+run;
+/*Ստեղծում ենք նոր տողեր,որը կունենա 1 արժեք ըստ մեր առաջին Data-ի և 001-ը*/
+data data_1;
+	set data_1;
+	Gender=1;
+	SAIT="001";
+run;
+data data_2;
+	set data_2;
+	SAIT="002";
+run;
+DATA data_2;
+    SET data_2;
+    RENAME 'Patient number'n = Patient_num
+           Gender_ = Gender
+           Diabetes_=Outcome;
+RUN;
+
+
+/* Data 1-ի համար ստեղծում ենք համարակալման համար տող*/
+data data_1;
+	SET data_1;
+	  Patient_num = _N_;  
+run;
+/*Ընդհանուր վիճակագրական տվյալների դուրս բերում*/
+proc corr data=data_1;
+run;
+proc corr data=data_2;
+run;
+data data_1;
+    SET data_1;
+    RETAIN SAIT Patient_num Gender; /* Պահպանել սյուները ցանկալի հերթականությամբ */
+run;
+
+/* Data-ները միացնում ենք իրար*/
+data ML; 
+	RENAME 'Systolic BP'n=Systolic_BP;
+	RENAME 'Diastolic BP'n=Diastolic_BP;
+	RENAME 'HDL Chol'n=HDL_Chol;
+	RENAME 'Chol/HDL ratio'n=Chol_DL_ratio;
+	RENAME 'Waist/hip ratio'n=Waist_hip_ratio;
+	set data_1 data_2;
+	drop Height Weight DiabetesPedigreeFunction waist;
+run;
+data ML;
+	set ML;
+	drop Chol_DL_ratio Waist_hip_ratio;
+run;
+/* Data-ից ջնջում ենք duplicate-ները*/
+proc sort data=ML nodup;
+	by Age;
+run;
+
+title 'Տարիքային բաշխվածությունը ըստ սեռի';
+proc univariate data=ML noprint;
+   class Gender;
+   histogram Age / nrows = 2;
+run;
+
+title "BMI-ի բաշխվածությունը";	
+proc sgplot data=ML;
+  histogram BMI/ fillattrs=(color=Tan);
+  density BMI/ lineattrs=(color=blue);
+run;
+
+title "Clucose Distribution";	
+proc sgplot data=ML;
+   histogram Glucose / fillattrs=(color=Violet);
+   density Glucose / lineattrs=(color=black);
+   xaxis label='Glucose Distribution';
+   yaxis label='Amount of glucose';
+   keylegend / location=inside position=bottomright;
+run;
+
+
+/* Ստեղծել նոր տվյալների բազա յուրաքանչյուր տարիքային խմբի տոկոսներով */
+proc sql;
+   create table AgeCounts as
+   select Age,
+          count(*) as Count
+   from ML
+   group by Age;
+   select sum(Count) into :TotalCount
+   from AgeCounts;
+
+   /* Հաշվել տոկոսները */
+   create table AgePercent as
+   select Age,
+          Count,
+          (Count / &TotalCount) as Percent format=percent7.1
+   from AgeCounts;
+quit;
+
+/*Ստեղծել pie գծապատկեր */
+title1 "Տարիքի տոկոսն ըստ հիվանդի թվի";
+proc gchart data=AgePercent;
+   pie Age / sumvar=Percent;
+run;
+
+/* Հաշվել median-ը  PROC SQL-ով */
+proc sql noprint;
+   select median(Pregnancies) into :MedianValue
+   from ML;
+quit;
+
+%put Median value is: &MedianValue;
+
+/* Mean imputation or բաց թողնված արժեքները փոփոխականել միջինով,median-ով և այլն */
+data ML;
+	set ML;
+	if missing(Pregnancies) then 
+		Pregnancies = &MedianValue.;
+run;
+
+data ML;
+	set ML;
+	if missing(BloodPressure) then 
+		BloodPressure = 69;
+run;
+
+data ML;
+	set ML;
+	if missing(Insulin) then 
+		Insulin = 79; 
+run;
+data ML;
+	set ML;
+	if missing(SkinThickness) then 
+		SkinThickness = 20;
+run;
+run;
+data ML;
+	set ML;
+	if BMI=0 then 
+		BMI = mean(BMI); 
+run;
+data ML;
+	set ML;
+	if missing(Cholesterol) then 
+		Cholesterol = 207;
+run;
+data ML;
+	set ML;
+	if missing(HDL_Chol) then
+		HDL_Chol=50;
+run;
+data ML;
+	set ML;
+	if missing(Systolic_BP) then
+		Systolic_BP=137;
+run;
+data ML;
+	set ML;
+	if missing(Diastolic_BP) then
+		Diastolic_BP=83;
+run;
+data ML;
+	set ML;
+	if missing(hip) then
+		hip=43;
+run;
+/*Շաքարային դիաբեդով հիվանդների քանակը*/
+proc sgplot data=ML;
+   vbar Outcome / datalabel datalabelattrs=(size=5) fillattrs=(color=Steel);
+   xaxis label="Outcome";
+   yaxis label="Count";
+run;
+/* Create Kernel Density Estimation (KDE) plot */
+proc sgplot data=ML;
+   density Glucose / group=Outcome legendlabel="Outcome";
+   xaxis label="Glucose";
+   yaxis label="Frequency";
+   keylegend / title="Outcome" location=inside position=topright across=1;
+   keylegend 'Positive';
+   keylegend 'Negative';
+run;
+
+/* Data-ն բաժանում ենք training (70%) and testing(30%) dataset-երի  */
+data ML;
+	set ML;
+	n=ranuni(1234);
+run;
+
+proc sort data=ML;
+	by n;
+run;
+  
+data _train _test;
+set ML nobs=nobs;
+if _n_<=.7*nobs then output _train;
+else output _test;
+run;
+
+/*Lոգիստիկ ռեգրեսիա */
+proc logistic data=_train;
+   /*strata Outcome;*/
+   model outcome(event='1')=Patient_num Pregnancies Glucose BloodPressure SkinThickness Insulin BMI Age Gender Cholesterol HDL_Chol Systolic_BP Diastolic_BP hip;
+   score data=_train out=TrainScored;
+run;
+
+/* Evaluate model performance on training data */
+proc logistic data=TrainScored;
+    model outcome(event='1') = Patient_num Pregnancies Glucose BloodPressure SkinThickness Insulin BMI Age Gender Cholesterol HDL_Chol Systolic_BP Diastolic_BP hip;
+    roc 'ROC curve for Training Data' pred=outcome; 
+run;
+
+
+/* Fit logistic regression model */
+proc logistic data=_test;
+    model outcome(event='1') = Patient_num Pregnancies Glucose BloodPressure SkinThickness Insulin BMI Age Gender Cholesterol HDL_Chol Systolic_BP Diastolic_BP hip;
+    score data=_test out=TestScored;
+run;
+
+/* Evaluate model performance on test data */
+proc logistic data=_test;
+    model outcome(event='1') = Patient_num Pregnancies Glucose BloodPressure SkinThickness Insulin BMI Age Gender Cholesterol HDL_Chol Systolic_BP Diastolic_BP hip;
+    roc 'ROC curve for Test Data' pred=outcome;
+run;
+
+
+/* Dissension tree model */
+ods graphics on;
+data mydata;
+    set ML;
+run;
+proc hpsplit data=ML;
+    class Outcome;
+    model Outcome(event='1') =
+        Patient_num
+        Pregnancies
+        Glucose
+        BloodPressure
+        SkinThickness
+        Insulin
+        BMI
+        Age
+        Gender
+        Cholesterol
+        HDL_Chol
+        Systolic_BP
+        Diastolic_BP
+        hip
+        ;
+    prune GINI; /* Prune using Deviance Reduction */
+    partition fraction(validate=0.3 seed=42);
+    output out=scored;
+run;
+
+
+
+
+
+
